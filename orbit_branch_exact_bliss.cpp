@@ -710,6 +710,74 @@ struct WorkStack {
   }
 };
 
+// --------------------------- sub-MIP solve at cutoff ---------------------------
+// copied from the depth/sensing variants to provide fallback when a node is
+// handed off to a full Gurobi solve.  The exact variant forgot to include this
+// previously, leading to undeclared identifier errors.
+static void solve_submip_with_fixings(GRBModel& base_mip_model,
+                                     const BuiltGraph& graph,
+                                     const Node& node,
+                                     int numVars,
+                                     int grb_threads,
+                                     double remaining_time,
+                                     bool have_inc,
+                                     double best_obj,
+                                     std::mutex& inc_mtx,
+                                     bool& have_inc_ref,
+                                     double& best_obj_ref,
+                                     std::vector<double>& best_sol_ref,
+                                     std::atomic<bool>& terminated_flag) {
+  GRBModel mip(base_mip_model);
+  mip.set(GRB_IntParam_OutputFlag, 0);
+  if (grb_threads > 0) mip.set(GRB_IntParam_Threads, grb_threads);
+  if (remaining_time > 0.0) mip.set(GRB_DoubleParam_TimeLimit, remaining_time);
+
+  if (have_inc) {
+    mip.set(GRB_DoubleParam_Cutoff, best_obj - 1e-9);
+  }
+
+  GRBVar* mvars_ptr = mip.getVars();
+  std::vector<GRBVar> mvars((size_t)numVars);
+  for (int i = 0; i < numVars; ++i) mvars[(size_t)i] = mvars_ptr[i];
+  delete[] mvars_ptr;
+
+  for (size_t bpos = 0; bpos < graph.bin_var_indices.size(); ++bpos) {
+    int8_t f = node.fix_bin[bpos];
+    if (f < 0) continue;
+    int var_idx = graph.bin_var_indices[bpos];
+    if (f == 0) {
+      mvars[(size_t)var_idx].set(GRB_DoubleAttr_LB, 0.0);
+      mvars[(size_t)var_idx].set(GRB_DoubleAttr_UB, 0.0);
+    } else {
+      mvars[(size_t)var_idx].set(GRB_DoubleAttr_LB, 1.0);
+      mvars[(size_t)var_idx].set(GRB_DoubleAttr_UB, 1.0);
+    }
+  }
+  mip.update();
+
+  mip.optimize();
+
+  int st = mip.get(GRB_IntAttr_Status);
+  if (st == GRB_TIME_LIMIT) {
+    terminated_flag.store(true);
+  }
+
+  int solcnt = mip.get(GRB_IntAttr_SolCount);
+  if (solcnt > 0) {
+    double obj = mip.get(GRB_DoubleAttr_ObjVal);
+
+    std::vector<double> x((size_t)numVars, 0.0);
+    for (int i = 0; i < numVars; ++i) x[(size_t)i] = mvars[(size_t)i].get(GRB_DoubleAttr_X);
+
+    std::lock_guard<std::mutex> lk(inc_mtx);
+    if (!have_inc_ref || obj < best_obj_ref) {
+      have_inc_ref = true;
+      best_obj_ref = obj;
+      best_sol_ref = std::move(x);
+    }
+  }
+}
+
 // --------------------------- main ---------------------------
 int main(int argc, char** argv) {
 #if !defined(__SANITIZE_ADDRESS__) && !defined(__SANITIZE_UNDEFINED__)
@@ -730,9 +798,9 @@ int main(int argc, char** argv) {
   double time_limit = 0.0;
   int node_limit = 20000;
 
-  int workers = 16;          // DEFAULT AS REQUESTED
-  int grb_threads = 7;       // per worker LP threads (recommended when parallelizing nodes)
-  double sym_budget = 0.05;  // seconds per orbit query when no global limit (or cap)
+  int workers = 32;          // DEFAULT AS REQUESTED
+  int grb_threads = 0;       // per worker LP threads (recommended when parallelizing nodes)
+  double sym_budget = 0.35;  // seconds per orbit query when no global limit (or cap)
 
   // parse CLI arguments
   for (int i = 2; i < argc; ++i) {
@@ -826,6 +894,7 @@ int main(int argc, char** argv) {
 
     std::atomic<int> explored{0};
     std::atomic<int> branched{0};
+    std::atomic<int> handed_to_gurobi{0};
     std::atomic<bool> terminated{false};
 
     // incumbent tracking shared by all workers (protected by a mutex).
@@ -1121,6 +1190,7 @@ int main(int argc, char** argv) {
 
     out["explored_nodes"] = explored.load();
     out["branched_nodes"] = branched.load();
+    out["handoff_nodes"] = handed_to_gurobi.load();
     out["terminated_early"] = terminated.load();
     out["have_incumbent"] = have_inc;
     out["best_obj"] = have_inc ? json(best_obj) : json(nullptr);

@@ -713,9 +713,9 @@ int main(int argc, char** argv) {
   double time_limit = 0.0;
   int node_limit = 20000;
 
-  int workers = 16;
+  int workers = 32;
   int grb_threads = 0;      // 0 => do not set Threads
-  double sym_budget = 0.05;
+  double sym_budget = 0.25;
   int orbit_depth = 3;
 
   for (int i = 2; i < argc; ++i) {

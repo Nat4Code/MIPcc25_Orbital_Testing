@@ -1,0 +1,7 @@
+method,time_sec,objective
+gurobi_presolve,0.00017905235290527344,-0.0
+gurobi_presolve,0.0077381134033203125,414.0
+gurobi_presolve,1.5428268909454346,416.0
+gurobi_presolve,1.5840950012207031,418.0
+gurobi_presolve,8.142972946166992,420.0
+heuristic_optimal,2.217743,420.0

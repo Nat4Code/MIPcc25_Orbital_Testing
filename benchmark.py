@@ -4,7 +4,7 @@ from pathlib import Path
 
 ROOT = Path.cwd()
 
-TIME_LIMIT = 10000
+TIME_LIMIT = 360 # 6 min right now
 
 def _to_text(x):
     if x is None:
@@ -113,7 +113,6 @@ def main():
 
     # binaries / scripts to run (expected to be in the same folder)
     tools = [
-        ("exact", [str(root / "orbit_branch_exact"), "--time-limit", str(TIME_LIMIT)]),
         ("depth", [str(root / "orbit_branch_depth"), "--time-limit", str(TIME_LIMIT)]),
         ("sensing", [str(root / "orbit_branch_sensing"), "--time-limit", str(TIME_LIMIT)]),
         ("py", [sys.executable, str(root / "qp_bench.py")]),
@@ -140,7 +139,7 @@ def main():
 
             for name, cmd in tools:
                 # C++ binaries expect the model file as the first argument: `prog model.mps [--time-limit ...]`
-                if name in ("exact", "depth", "sensing"):
+                if name in ("depth", "sensing"):
                     cmd_run = [cmd[0], mps_path, "--time-limit", str(TIME_LIMIT)]
                 elif name == "baseline":
                     cmd_run = [str(root / "baseline"), mps_path, str(TIME_LIMIT)]
